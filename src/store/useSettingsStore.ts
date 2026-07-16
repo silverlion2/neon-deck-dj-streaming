@@ -82,11 +82,13 @@ interface SettingsState {
   theme: ThemeTokens;
   muted: boolean;
   autoDj: boolean;
+  volume: number;
   setPreset: (id: PresetId) => void;
   setVisualMode: (m: VisualMode) => void;
   setTheme: (id: string) => void;
   toggleMute: () => void;
   toggleAutoDj: () => void;
+  setVolume: (v: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -97,6 +99,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   theme: THEMES[0],
   muted: false,
   autoDj: true,
+  volume: 78,
 
   setPreset: (id) => {
     const preset = PRESETS.find((p) => p.id === id) ?? PRESETS[0];
@@ -115,6 +118,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ muted: next });
   },
   toggleAutoDj: () => set((s) => ({ autoDj: !s.autoDj })),
+  setVolume: (v) => {
+    audioEngine.setVolume(v / 100);
+    set({ volume: v });
+  },
 }));
 
 export function applyTheme(theme: ThemeTokens) {

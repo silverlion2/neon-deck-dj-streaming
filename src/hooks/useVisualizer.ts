@@ -1,9 +1,8 @@
 import { useEffect, useRef } from "react";
-import { useLiveStore } from "@/store/useLiveStore";
 import { useSettingsStore } from "@/store/useSettingsStore";
 import { audioEngine } from "@/audio/AudioEngine";
 
-const BARS = 72;
+const BARS = 80;
 
 interface Particle {
   x: number;
@@ -20,7 +19,8 @@ export function useVisualizer() {
   const dataRef = useRef<number[]>(new Array(BARS).fill(0));
   const particlesRef = useRef<Particle[]>([]);
   const rafRef = useRef<number>(0);
-  const lastBeat = useRef(0);
+  const beatRef = useRef(0);
+  const lastBeatTime = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -29,8 +29,6 @@ export function useVisualizer() {
     if (!ctx) return;
 
     const render = () => {
-      const live = useLiveStore.getState();
-      const { isPlaying, beat, currentTrack } = live;
       const settings = useSettingsStore.getState();
       const mode = settings.visualMode;
       const theme = settings.theme;
@@ -45,42 +43,57 @@ export function useVisualizer() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      const beatPulse = beat !== lastBeat.current ? 1 : 0;
-      lastBeat.current = beat;
-
       const analyser = audioEngine.getAnalyser();
-      let realFreq: Uint8Array | null = null;
+      let freqData: Uint8Array | null = null;
+      let bassEnergy = 0;
+      let midEnergy = 0;
+      let highEnergy = 0;
+      let totalEnergy = 0;
+
       if (analyser) {
-        realFreq = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(realFreq);
+        freqData = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(freqData);
+        const bins = freqData.length;
+        const bassEnd = Math.floor(bins * 0.1);
+        const midEnd = Math.floor(bins * 0.4);
+        for (let i = 0; i < bassEnd; i++) bassEnergy += freqData[i];
+        for (let i = bassEnd; i < midEnd; i++) midEnergy += freqData[i];
+        for (let i = midEnd; i < bins; i++) highEnergy += freqData[i];
+        bassEnergy /= bassEnd * 255;
+        midEnergy /= (midEnd - bassEnd) * 255;
+        highEnergy /= (bins - midEnd) * 255;
+        totalEnergy = (bassEnergy + midEnergy + highEnergy) / 3;
+      }
+
+      const now = performance.now();
+      let beatPulse = 0;
+      if (bassEnergy > 0.55 && now - lastBeatTime.current > 250) {
+        lastBeatTime.current = now;
+        beatRef.current++;
+        beatPulse = 1;
       }
 
       const data = dataRef.current;
-      const intensityBase = isPlaying ? 0.35 + beatPulse * 0.5 : 0.08;
-      const accent = theme.primary;
-      const accent2 = theme.secondary;
+      const hasAudio = totalEnergy > 0.01;
 
       for (let i = 0; i < BARS; i++) {
-        const center = 1 - Math.abs(i - BARS / 2) / (BARS / 2);
-        const real = realFreq ? realFreq[Math.floor((i / BARS) * realFreq.length)] / 255 : 0;
-        const target = isPlaying
-          ? Math.max(
-              0.05,
-              intensityBase * center +
-                real * 0.6 +
-                Math.random() * 0.3 * center +
-                beatPulse * 0.3 * center
-            )
-          : 0.04 + Math.random() * 0.03;
-        data[i] += (target - data[i]) * 0.35;
+        let target: number;
+        if (hasAudio && freqData) {
+          const idx = Math.floor((i / BARS) * freqData.length * 0.7);
+          target = freqData[idx] / 255;
+        } else {
+          const center = 1 - Math.abs(i - BARS / 2) / (BARS / 2);
+          target = 0.03 + Math.sin(now / 800 + i * 0.3) * 0.02 + center * 0.03;
+        }
+        data[i] += (target - data[i]) * 0.4;
       }
 
       const cx = w / 2;
       const cy = h / 2;
 
-      if (mode === "ring") drawRing(ctx, data, cx, cy, w, h, accent, accent2, beatPulse);
-      else if (mode === "wave") drawWave(ctx, data, w, h, accent, accent2, beatPulse);
-      else drawParticles(ctx, data, particlesRef.current, cx, cy, w, h, accent, accent2, beatPulse, currentTrack.bpm);
+      if (mode === "ring") drawRing(ctx, data, cx, cy, w, h, theme.primary, theme.secondary, beatPulse, bassEnergy);
+      else if (mode === "wave") drawWave(ctx, data, w, h, theme.primary, theme.secondary, beatPulse, totalEnergy);
+      else drawParticles(ctx, data, particlesRef.current, cx, cy, w, h, theme.primary, theme.secondary, beatPulse, bassEnergy);
 
       rafRef.current = requestAnimationFrame(render);
     };
@@ -101,11 +114,12 @@ function drawRing(
   h: number,
   accent: string,
   accent2: string,
-  beatPulse: number
+  beatPulse: number,
+  bassEnergy: number
 ) {
-  const baseR = Math.min(w, h) * 0.16;
-  const maxLen = Math.min(w, h) * 0.3;
-  ctx.save();
+  const baseR = Math.min(w, h) * 0.13 + bassEnergy * 30;
+  const maxLen = Math.min(w, h) * 0.32;
+
   for (let i = 0; i < data.length; i++) {
     const angle = (i / data.length) * Math.PI * 2 - Math.PI / 2;
     const len = data[i] * maxLen;
@@ -117,28 +131,28 @@ function drawRing(
     grad.addColorStop(0, accent);
     grad.addColorStop(1, accent2);
     ctx.strokeStyle = grad;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 + bassEnergy * 2;
     ctx.lineCap = "round";
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 12 + beatPulse * 18;
+    ctx.shadowBlur = 8 + beatPulse * 20 + bassEnergy * 15;
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
   }
-  ctx.restore();
+  ctx.shadowBlur = 0;
 
-  ctx.save();
-  const pulseR = baseR + beatPulse * 18 + Math.sin(Date.now() / 300) * 4;
-  const ringGrad = ctx.createRadialGradient(cx, cy, pulseR * 0.4, cx, cy, pulseR);
-  ringGrad.addColorStop(0, "rgba(0,0,0,0)");
-  ringGrad.addColorStop(0.7, hexA(accent, 0.18));
-  ringGrad.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = ringGrad;
-  ctx.beginPath();
-  ctx.arc(cx, cy, pulseR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  if (beatPulse > 0 || bassEnergy > 0.3) {
+    const pulseR = baseR + beatPulse * 40 + bassEnergy * 20;
+    const ringGrad = ctx.createRadialGradient(cx, cy, pulseR * 0.3, cx, cy, pulseR * 1.5);
+    ringGrad.addColorStop(0, "rgba(0,0,0,0)");
+    ringGrad.addColorStop(0.6, hexA(accent, 0.15 + bassEnergy * 0.2));
+    ringGrad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = ringGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, pulseR * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawWave(
@@ -148,17 +162,18 @@ function drawWave(
   h: number,
   accent: string,
   accent2: string,
-  beatPulse: number
+  beatPulse: number,
+  energy: number
 ) {
   const cy = h / 2;
-  ctx.save();
   for (let layer = 0; layer < 3; layer++) {
     ctx.beginPath();
-    const amp = (h * 0.25) * (1 - layer * 0.25);
-    for (let x = 0; x <= w; x += 4) {
+    const amp = (h * 0.22) * (1 - layer * 0.25) * (0.5 + energy);
+    const phase = performance.now() / (300 - layer * 50);
+    for (let x = 0; x <= w; x += 3) {
       const idx = Math.floor((x / w) * data.length);
       const v = data[idx] ?? 0;
-      const y = cy + Math.sin(x / 30 + Date.now() / 200 + layer) * amp * v * (1 + beatPulse * 0.4);
+      const y = cy + Math.sin(x / 40 + phase + layer * 1.5) * amp * (v + 0.1) * (1 + beatPulse * 0.5);
       if (x === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
@@ -170,11 +185,12 @@ function drawWave(
     ctx.lineWidth = 3 - layer;
     ctx.globalAlpha = 1 - layer * 0.3;
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 14 + beatPulse * 16;
+    ctx.shadowBlur = 12 + beatPulse * 18;
     ctx.lineCap = "round";
     ctx.stroke();
   }
-  ctx.restore();
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
 }
 
 function drawParticles(
@@ -188,61 +204,58 @@ function drawParticles(
   accent: string,
   accent2: string,
   beatPulse: number,
-  bpm: number
+  bassEnergy: number
 ) {
   if (beatPulse > 0) {
-    const count = 10;
+    const count = 12 + Math.floor(bassEnergy * 20);
     for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      const speed = 2 + Math.random() * 3;
+      const angle = (i / count) * Math.PI * 2 + Math.random() * 0.5;
+      const speed = 2 + Math.random() * 4 + bassEnergy * 3;
       particles.push({
         x: cx,
         y: cy,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: 1,
-        size: 2 + Math.random() * 3,
+        size: 2 + Math.random() * 4,
         color: Math.random() > 0.5 ? accent : accent2,
       });
     }
   }
-  if (particles.length > 220) particles.splice(0, particles.length - 220);
+  if (particles.length > 300) particles.splice(0, particles.length - 300);
 
-  ctx.save();
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx;
     p.y += p.vy;
-    p.vx *= 0.98;
-    p.vy *= 0.98;
-    p.life -= 0.012;
-    if (p.life <= 0 || p.x < 0 || p.x > w || p.y < 0 || p.y > h) {
+    p.vx *= 0.97;
+    p.vy *= 0.97;
+    p.life -= 0.01;
+    if (p.life <= 0 || p.x < -20 || p.x > w + 20 || p.y < -20 || p.y > h + 20) {
       particles.splice(i, 1);
       continue;
     }
     ctx.globalAlpha = p.life;
     ctx.fillStyle = p.color;
     ctx.shadowColor = p.color;
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = 10;
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.restore();
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
 
   const energy = data.reduce((s, d) => s + d, 0) / data.length;
-  const coreR = 40 + energy * 60 + beatPulse * 20;
+  const coreR = 30 + energy * 80 + bassEnergy * 40 + beatPulse * 25;
   const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-  grad.addColorStop(0, hexA(accent, 0.5));
-  grad.addColorStop(0.6, hexA(accent2, 0.18));
+  grad.addColorStop(0, hexA(accent, 0.4 + bassEnergy * 0.3));
+  grad.addColorStop(0.5, hexA(accent2, 0.15));
   grad.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.save();
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
   ctx.fill();
-  ctx.restore();
-  void bpm;
 }
 
 function hexA(hex: string, a: number) {

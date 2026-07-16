@@ -36,7 +36,7 @@ import { ColdWarning } from "@/components/Vibe/ColdWarning";
 import { LoopRecorder } from "@/components/Deck/LoopRecorder";
 import { KeyboardMapper } from "@/components/Deck/KeyboardMapper";
 import {
-  ListMusic, Lightbulb, MonitorSmartphone, MessageSquareText,
+  ListMusic, Lightbulb, MonitorSmartphone, MonitorPlay, MessageSquareText,
   BarChart3, Trophy, Gamepad2, Moon, Star, Repeat, Sparkles, PlugZap,
 } from "lucide-react";
 
@@ -44,7 +44,7 @@ type LeftTab = "queue" | "advisor" | "platform" | "adapter" | "integrate" | "gam
 type IntegSub = "hub" | "stream" | "simulcast" | "compliance";
 type RightTab = "chat" | "analytics" | "audience" | "host" | "highlight" | "loop";
 
-export default function LiveDeck() {
+export default function LiveDeck({ onGoStage }: { onGoStage?: () => void }) {
   useBeatEngine();
   const [leftTab, setLeftTab] = useState<LeftTab>("integrate");
   const [integSub, setIntegSub] = useState<IntegSub>("hub");
@@ -60,8 +60,20 @@ export default function LiveDeck() {
 
       <div className="flex items-center gap-2 border-b border-white/5 px-3 py-1.5">
         <ViewerBadges />
-        <div className="ml-auto hidden md:block">
-          <LayoutSwitcher />
+        <div className="ml-auto flex items-center gap-2">
+          {onGoStage && (
+            <button
+              onClick={onGoStage}
+              className="flex items-center gap-1.5 rounded-lg border px-3 py-1 font-display text-[10px] font-bold uppercase tracking-widest transition active:scale-95"
+              style={{ borderColor: "rgba(255,45,149,0.4)", background: "rgba(255,45,149,0.1)", color: "#FF2D95" }}
+            >
+              <MonitorPlay className="h-3.5 w-3.5" />
+              舞台模式
+            </button>
+          )}
+          <div className="hidden md:block">
+            <LayoutSwitcher />
+          </div>
         </div>
       </div>
 

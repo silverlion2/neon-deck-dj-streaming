@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { audioEngine, type PlayState, type EqBands } from "@/audio/AudioEngine";
+import { detectBpm, pickNextByBpm, type BpmCandidate } from "@/audio/bpmDetect";
 
 export interface MusicFile {
   id: string;
@@ -7,6 +8,8 @@ export interface MusicFile {
   url: string;
   size: number;
   duration?: number;
+  bpm?: number;
+  bpmConfidence?: number;
 }
 
 interface MusicPlayerState {
@@ -28,6 +31,7 @@ interface MusicPlayerState {
   resetEq: () => void;
   toggleAutoMix: () => void;
   toggleObsMode: () => void;
+  setBpm: (id: string, bpm: number, confidence: number) => void;
   hydrate: () => void;
 }
 
@@ -91,15 +95,21 @@ export const useMusicPlayerStore = create<MusicPlayerState>((set, get) => {
     obsMode: false,
 
     addFiles: (files) => {
-      const newFiles: MusicFile[] = Array.from(files)
-        .filter((f) => f.type.startsWith("audio/"))
-        .map((f) => ({
-          id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          name: f.name.replace(/\.[^.]+$/, ""),
-          url: URL.createObjectURL(f),
-          size: f.size,
-        }));
+      const audioFiles = Array.from(files).filter((f) => f.type.startsWith("audio/"));
+      const newFiles: MusicFile[] = audioFiles.map((f) => ({
+        id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: f.name.replace(/\.[^.]+$/, ""),
+        url: URL.createObjectURL(f),
+        size: f.size,
+      }));
       if (newFiles.length === 0) return;
+
+      audioFiles.forEach((file, i) => {
+        detectBpm(file).then((res) => {
+          if (res.bpm > 0) get().setBpm(newFiles[i].id, res.bpm, res.confidence);
+        });
+      });
+
       set((s) => {
         const playlist = [...s.playlist, ...newFiles];
         const shouldAutoPlay = s.currentIndex === -1;
@@ -152,7 +162,17 @@ export const useMusicPlayerStore = create<MusicPlayerState>((set, get) => {
     next: () =>
       set((s) => {
         if (s.playlist.length === 0) return s;
-        const nextIdx = (s.currentIndex + 1) % s.playlist.length;
+        let nextIdx = (s.currentIndex + 1) % s.playlist.length;
+        const currentFile = s.currentIndex >= 0 ? s.playlist[s.currentIndex] : null;
+        if (s.autoMix && currentFile?.bpm && currentFile.bpm > 0) {
+          const candidates: BpmCandidate[] = s.playlist
+            .map((f, i) => ({ bpm: f.bpm ?? 0, index: i }))
+            .filter((c) => c.bpm > 0 && c.index !== s.currentIndex);
+          if (candidates.length > 0) {
+            const picked = pickNextByBpm(currentFile.bpm, candidates);
+            if (picked >= 0) nextIdx = picked;
+          }
+        }
         const file = s.playlist[nextIdx];
         if (s.autoMix && s.playState.isPlaying && !audioEngine.isCrossfading()) {
           audioEngine.crossfadeTo(file.url, file.name, 3, () => {
@@ -197,6 +217,13 @@ export const useMusicPlayerStore = create<MusicPlayerState>((set, get) => {
 
     toggleAutoMix: () => set((s) => ({ autoMix: !s.autoMix })),
     toggleObsMode: () => set((s) => ({ obsMode: !s.obsMode })),
+    setBpm: (id, bpm, confidence) => {
+      set((s) => ({
+        playlist: s.playlist.map((f) =>
+          f.id === id ? { ...f, bpm, bpmConfidence: confidence } : f
+        ),
+      }));
+    },
 
     hydrate: () => {
       const data = loadSession();

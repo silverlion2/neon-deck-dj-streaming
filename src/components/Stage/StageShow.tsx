@@ -2,10 +2,11 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import {
   Play, Pause, SkipForward, SkipBack, Volume2, VolumeX,
   Upload, Music, Circle, Activity, Sparkles, X, ListMusic,
-  Sliders, Monitor, Shuffle, RotateCcw,
+  Sliders, Monitor, Shuffle, RotateCcw, FileText,
 } from "lucide-react";
 import { useMusicPlayerStore, saveSession } from "@/store/useMusicPlayerStore";
 import { useSettingsStore, type VisualMode } from "@/store/useSettingsStore";
+import { useLyricsStore } from "@/store/useLyricsStore";
 import { useVisualizer } from "@/hooks/useVisualizer";
 import { formatTime } from "@/utils/format";
 import type { EqBands } from "@/audio/AudioEngine";
@@ -33,14 +34,35 @@ export function StageShow({ onExit }: { onExit: () => void }) {
     theme, muted, toggleMute, visualMode, setVisualMode, volume, setVolume,
     themeId, presetId,
   } = useSettingsStore();
+  const {
+    lines: lrcLines, currentIndex: lrcIndex, visible: lrcVisible,
+    loadLrc, toggleVisible: toggleLrcVisible, updateCurrentTime,
+  } = useLyricsStore();
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [showEq, setShowEq] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [flash, setFlash] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lrcInputRef = useRef<HTMLInputElement>(null);
+  const prevIndexRef = useRef(currentIndex);
 
   useEffect(() => {
     hydrate();
   }, [hydrate]);
+
+  useEffect(() => {
+    updateCurrentTime(playState.currentTime);
+  }, [playState.currentTime, updateCurrentTime]);
+
+  useEffect(() => {
+    if (prevIndexRef.current !== currentIndex && currentIndex >= 0) {
+      prevIndexRef.current = currentIndex;
+      setFlash(true);
+      const t = setTimeout(() => setFlash(false), 400);
+      return () => clearTimeout(t);
+    }
+    prevIndexRef.current = currentIndex;
+  }, [currentIndex]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -56,9 +78,21 @@ export function StageShow({ onExit }: { onExit: () => void }) {
     return () => clearInterval(interval);
   }, [themeId, presetId, volume, visualMode, autoMix, eq]);
 
+  const handleLrcFile = useCallback(
+    (file: File) => {
+      const reader = new FileReader();
+      reader.onload = () => loadLrc(String(reader.result ?? ""), file.name);
+      reader.readAsText(file);
+    },
+    [loadLrc]
+  );
+
   const handleFiles = useCallback(
-    (files: FileList | null) => {
-      if (files && files.length > 0) addFiles(files);
+    (files: FileList | File[] | null) => {
+      if (!files) return;
+      const arr = Array.from(files);
+      const audioFiles = arr.filter((f) => f.type.startsWith("audio/"));
+      if (audioFiles.length > 0) addFiles(audioFiles);
     },
     [addFiles]
   );
@@ -67,9 +101,13 @@ export function StageShow({ onExit }: { onExit: () => void }) {
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragOver(false);
-      handleFiles(e.dataTransfer.files);
+      const files = Array.from(e.dataTransfer.files);
+      const lrcFile = files.find((f) => f.name.endsWith(".lrc"));
+      const audioFiles = files.filter((f) => f.type.startsWith("audio/"));
+      if (lrcFile) handleLrcFile(lrcFile);
+      if (audioFiles.length > 0) addFiles(audioFiles);
     },
-    [handleFiles]
+    [addFiles, handleLrcFile]
   );
 
   useEffect(() => {
@@ -90,13 +128,15 @@ export function StageShow({ onExit }: { onExit: () => void }) {
         toggleObsMode();
       } else if (e.key === "m" || e.key === "M") {
         toggleMute();
+      } else if (e.key === "t" || e.key === "T") {
+        toggleLrcVisible();
       } else if (e.key === "1") setVisualMode("ring");
       else if (e.key === "2") setVisualMode("wave");
       else if (e.key === "3") setVisualMode("particles");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePlay, next, prev, toggleObsMode, toggleMute, setVisualMode]);
+  }, [togglePlay, next, prev, toggleObsMode, toggleMute, setVisualMode, toggleLrcVisible]);
 
   const hasMusic = playlist.length > 0;
   const currentFile = playlist[currentIndex];
@@ -130,7 +170,26 @@ export function StageShow({ onExit }: { onExit: () => void }) {
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
 
+      {flash && (
+        <div
+          className="pointer-events-none absolute inset-0 z-40"
+          style={{
+            background: `radial-gradient(circle at center, ${theme.primary}33 0%, transparent 60%)`,
+            animation: "flashOut 0.4s ease-out forwards",
+          }}
+        />
+      )}
+
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        {!playState.isPlaying && hasMusic && (
+          <div
+            className="pointer-events-none absolute h-52 w-52 rounded-full"
+            style={{
+              background: `radial-gradient(circle, ${theme.primary}22 0%, transparent 70%)`,
+              animation: "breathe 3s ease-in-out infinite",
+            }}
+          />
+        )}
         <div
           className="relative flex h-32 w-32 items-center justify-center rounded-full border-2 bg-ink-900/40 backdrop-blur-md"
           style={{
@@ -146,6 +205,34 @@ export function StageShow({ onExit }: { onExit: () => void }) {
           )}
         </div>
       </div>
+
+      {lrcVisible && lrcLines.length > 0 && (
+        <div className="pointer-events-none absolute left-0 right-0 top-1/2 -translate-y-1/2 px-8">
+          <div className="mx-auto max-w-2xl text-center">
+            {lrcLines.slice(Math.max(0, lrcIndex), lrcIndex + 3).map((line, i) => {
+              const realIdx = Math.max(0, lrcIndex) + i;
+              const isCurrent = realIdx === lrcIndex;
+              return (
+                <div
+                  key={realIdx}
+                  className="font-display transition-all duration-300"
+                  style={{
+                    fontSize: isCurrent ? "1.75rem" : "1.1rem",
+                    fontWeight: isCurrent ? 800 : 500,
+                    color: isCurrent ? "#fff" : "rgba(255,255,255,0.3)",
+                    textShadow: isCurrent ? `0 0 20px ${theme.primary}` : "none",
+                    opacity: isCurrent ? 1 : 0.5,
+                    marginBottom: "0.5rem",
+                    transform: isCurrent ? "scale(1)" : "scale(0.95)",
+                  }}
+                >
+                  {line.text}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {!hasMusic && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
@@ -226,6 +313,14 @@ export function StageShow({ onExit }: { onExit: () => void }) {
             );
           })}
         </div>
+        <button
+          onClick={() => lrcInputRef.current?.click()}
+          title="加载歌词"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-ink-900/60 backdrop-blur-md transition hover:text-white"
+          style={{ color: lrcVisible ? theme.accent : "rgba(255,255,255,0.5)" }}
+        >
+          <FileText className="h-4 w-4" />
+        </button>
         <button
           onClick={() => setShowEq((v) => !v)}
           title="EQ (E)"
@@ -426,8 +521,19 @@ export function StageShow({ onExit }: { onExit: () => void }) {
         onChange={(e) => handleFiles(e.target.files)}
       />
 
+      <input
+        ref={lrcInputRef}
+        type="file"
+        accept=".lrc,text/plain"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) handleLrcFile(f);
+        }}
+      />
+
       <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 font-body text-[9px] text-white/15">
-        空格 播放/暂停 · ← → 切歌 · L 列表 · E EQ · O OBS · M 静音 · 1/2/3 可视化
+        空格 播放/暂停 · ← → 切歌 · L 列表 · E EQ · O OBS · M 静音 · T 歌词 · 1/2/3 可视化
       </div>
     </div>
   );

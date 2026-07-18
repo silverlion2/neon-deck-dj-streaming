@@ -66,6 +66,14 @@ export default {
           "0%": { transform: "rotate(0deg)" },
           "100%": { transform: "rotate(360deg)" },
         },
+        breathe: {
+          "0%, 100%": { transform: "scale(1)", opacity: "0.4" },
+          "50%": { transform: "scale(1.15)", opacity: "0.7" },
+        },
+        flashOut: {
+          "0%": { opacity: "0.8" },
+          "100%": { opacity: "0" },
+        },
         slideIn: {
           "0%": { transform: "translateX(40px)", opacity: "0" },
           "100%": { transform: "translateX(0)", opacity: "1" },
@@ -79,6 +87,8 @@ export default {
         scan: "scan 6s linear infinite",
         blink: "blink 1s ease-in-out infinite",
         "spin-slow": "spinSlow 4s linear infinite",
+        breathe: "breathe 3s ease-in-out infinite",
+        "flash-out": "flashOut 0.4s ease-out forwards",
         "slide-in": "slideIn 0.3s ease-out forwards",
       },
     },

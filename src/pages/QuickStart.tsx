@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Upload, Music, Zap, ArrowRight, Sparkles } from "lucide-react";
+import { Upload, Music, Zap, ArrowRight, Sparkles, Monitor } from "lucide-react";
 import { useSettingsStore, THEMES } from "@/store/useSettingsStore";
 import { useMusicPlayerStore, loadSession } from "@/store/useMusicPlayerStore";
 import { PRESETS } from "@/audio/presets";
@@ -9,6 +9,7 @@ import { audioEngine } from "@/audio/AudioEngine";
 interface QuickStartProps {
   onEnterStage: () => void;
   onEnterConsole: () => void;
+  onEnterObsGuide: () => void;
 }
 
 const VIBE_PRESETS = [
@@ -18,7 +19,7 @@ const VIBE_PRESETS = [
   { themeId: "abyss", presetId: "TRAP" as const, name: "深海 Chill", color: "#2D7BFF", desc: "808 低音 · 深蓝" },
 ];
 
-export function QuickStart({ onEnterStage, onEnterConsole }: QuickStartProps) {
+export function QuickStart({ onEnterStage, onEnterConsole, onEnterObsGuide }: QuickStartProps) {
   const { theme, setTheme, setPreset, setVolume, setVisualMode } = useSettingsStore();
   const { playlist, addFiles } = useMusicPlayerStore();
   const [dragOver, setDragOver] = useState(false);
@@ -204,6 +205,13 @@ export function QuickStart({ onEnterStage, onEnterConsole }: QuickStartProps) {
           {!canGoLive && (
             <p className="mt-2 text-center font-body text-xs text-white/30">先拖入音乐文件，即可进入舞台开播</p>
           )}
+          <button
+            onClick={onEnterObsGuide}
+            className="mx-auto mt-3 flex items-center gap-1.5 font-body text-xs text-white/40 transition hover:text-white/70"
+          >
+            <Monitor className="h-3.5 w-3.5" />
+            OBS 推流配置指南
+          </button>
         </div>
       </div>
 

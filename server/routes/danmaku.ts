@@ -240,11 +240,24 @@ class BilibiliDanmakuBridge extends DanmakuBridge {
 
 class XiaohongshuDanmakuBridge extends DanmakuBridge {
   async connect(_token: string): Promise<void> {
-    // TODO 小红书直播弹幕协议差异：
-    // - 开放平台 https://open.xiaohongshu.com 直播弹幕 WS 接入需企业认证后申请白名单
-    // - 接入地址与 appKey 绑定，鉴权使用 access_token + liveStreamId + 签名
-    // - 帧格式为 length-prefixed JSON，消息类型 chat / gift / like / enter
-    // - 与抖音/B站不同，小红书未公开稳定 proto，需以企业接口文档为准
+    // 小红书直播弹幕协议现状（2024-2025 调研）：
+    //
+    // 【传输层】WebSocket，URL 含 longlink（如 wss://web-meta-lf.chat.xiaohongshu.com/...）
+    // 【编码层】私有二进制帧 + protobuf payload（ms.cmd 风格），非公开协议
+    // 【鉴权层】需要 web_session + x-s / x-t 签名（x-s 是 jsvmp 加密的动态 token）
+    //          x-s 算法在小红书前端 JS 里，用 VMP 虚拟机保护，逆向难度高且会随版本变化
+    //
+    // 【开放平台】open.xiaohongshu.com 有电商开放平台，但直播弹幕接口未对外开放
+    //            需要：企业实名认证 + 创建应用 + 申请权限 + 审核
+    //            即便通过审核，开放的是电商/笔记类 API，直播弹幕大概率仍走私有协议
+    //
+    // 【结论】无法像 B 站那样做"协议补全即可 wscat 实测"
+    //        可行路径只有两条：
+    //   (A) 走官方：申请小红书开放平台，若有直播数据开放能力则用官方 SDK
+    //   (B) 走私有：逆向 x-s 签名 + protobuf 定义（技术可行但维护成本高，且违反 ToS 风险）
+    //
+    // 本骨架保留接口占位，真实实现待官方开放或明确走 (B) 方案后再补
+    throw new Error("xiaohongshu danmaku not implemented: requires open-platform qualification or x-s signature reverse engineering");
   }
   close(): void {
     this.platformWs?.close();

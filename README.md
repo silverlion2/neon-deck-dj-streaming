@@ -117,10 +117,23 @@ npm run dev            # http://localhost:4000
 |---|---|---|---|
 | B 站 | ✅ 框架就绪 | ✅ 完整实现 | 无需企业认证，wscat 可直接连测 |
 | 抖音 | ✅ 框架就绪 | ⚠️ 协议 TODO | 需企业认证 + protobuf |
-| 小红书 | ✅ 框架就绪 | ⚠️ 协议 TODO | 需企业认证白名单 |
+| 小红书 | ✅ 框架就绪 | ❌ 受限 | 私有协议 + x-s 签名，需开放平台白名单或逆向，详见 danmaku.ts |
 | 快手 | ✅ 框架就绪 | ⚠️ 协议 TODO | 自定义二进制帧 |
 
 B 站弹幕实测：`wscat -c "ws://localhost:4000/ws?platform=bilibili&token=房间号"`
+
+### 小红书弹幕为何不实现
+
+小红书直播弹幕与 B 站有本质区别：
+- **传输**：WebSocket longlink + 私有 protobuf（非公开）
+- **鉴权**：需要 `x-s` / `x-t` 动态签名，算法在小红书前端 JS 里用 VMP 虚拟机保护，逆向难度高且随版本变化
+- **开放平台**：open.xiaohongshu.com 目前只开放电商/笔记 API，直播弹幕接口未对外开放
+
+可行路径只有两条（详见 [server/routes/danmaku.ts](server/routes/danmaku.ts) 注释）：
+1. **官方路径**：申请小红书开放平台企业认证，等待直播数据能力开放
+2. **私有路径**：逆向 x-s 签名 + protobuf 定义（技术可行，但维护成本高且有 ToS 风险）
+
+本项目当前选择官方路径，私有逆向不在开源项目范围内。
 
 ## 🎯 使用场景
 

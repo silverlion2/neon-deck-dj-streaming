@@ -61,6 +61,30 @@ function getConfig(platform: Platform) {
   return { cfg, clientId, clientSecret, redirectUri };
 }
 
+interface StateEntry {
+  platform: Platform;
+  createdAt: number;
+}
+
+const STATE_TTL_MS = 10 * 60 * 1000;
+const stateStore = new Map<string, StateEntry>();
+
+function pushState(state: string, platform: Platform): void {
+  const now = Date.now();
+  for (const [k, v] of stateStore) {
+    if (now - v.createdAt > STATE_TTL_MS) stateStore.delete(k);
+  }
+  stateStore.set(state, { platform, createdAt: now });
+}
+
+function consumeState(state: string, platform: Platform): boolean {
+  const entry = stateStore.get(state);
+  if (!entry) return false;
+  stateStore.delete(state);
+  if (Date.now() - entry.createdAt > STATE_TTL_MS) return false;
+  return entry.platform === platform;
+}
+
 type AsyncRoute = (req: Request, res: Response) => Promise<void>;
 
 function asyncHandler(fn: AsyncRoute) {
@@ -90,6 +114,7 @@ oauthRouter.get(
       return;
     }
     const state = crypto.randomBytes(16).toString("hex");
+    pushState(state, platform);
     const params = new URLSearchParams({
       client_key: clientId,
       response_type: "code",
@@ -121,6 +146,10 @@ oauthRouter.get(
     const state = typeof req.query.state === "string" ? req.query.state : "";
     if (!code) {
       res.status(400).json({ error: "missing_code" });
+      return;
+    }
+    if (!state || !consumeState(state, platform)) {
+      res.status(400).json({ error: "invalid_or_expired_state" });
       return;
     }
     const body = new URLSearchParams({

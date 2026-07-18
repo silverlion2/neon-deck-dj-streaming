@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Upload, Music, Zap, ArrowRight, Sparkles, Monitor } from "lucide-react";
+import { Upload, Music, Zap, ArrowRight, Sparkles, Monitor, Activity } from "lucide-react";
 import { useSettingsStore, THEMES } from "@/store/useSettingsStore";
 import { useMusicPlayerStore, loadSession } from "@/store/useMusicPlayerStore";
 import { PRESETS } from "@/audio/presets";
@@ -10,6 +10,7 @@ interface QuickStartProps {
   onEnterStage: () => void;
   onEnterConsole: () => void;
   onEnterObsGuide: () => void;
+  onEnterBpmLab: () => void;
 }
 
 const VIBE_PRESETS = [
@@ -19,7 +20,7 @@ const VIBE_PRESETS = [
   { themeId: "abyss", presetId: "TRAP" as const, name: "深海 Chill", color: "#2D7BFF", desc: "808 低音 · 深蓝" },
 ];
 
-export function QuickStart({ onEnterStage, onEnterConsole, onEnterObsGuide }: QuickStartProps) {
+export function QuickStart({ onEnterStage, onEnterConsole, onEnterObsGuide, onEnterBpmLab }: QuickStartProps) {
   const { theme, setTheme, setPreset, setVolume, setVisualMode } = useSettingsStore();
   const { playlist, addFiles } = useMusicPlayerStore();
   const [dragOver, setDragOver] = useState(false);
@@ -211,6 +212,13 @@ export function QuickStart({ onEnterStage, onEnterConsole, onEnterObsGuide }: Qu
           >
             <Monitor className="h-3.5 w-3.5" />
             OBS 推流配置指南
+          </button>
+          <button
+            onClick={onEnterBpmLab}
+            className="mx-auto flex items-center gap-1.5 font-body text-xs text-white/40 transition hover:text-white/70"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            BPM 检测实验室
           </button>
         </div>
       </div>

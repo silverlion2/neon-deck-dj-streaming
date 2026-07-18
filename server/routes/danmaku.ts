@@ -1,5 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import type { WebSocket } from "ws";
+import { WebSocket as WsClient } from "ws";
+import { brotliDecompressSync as zlibBrotliDecompressSync } from "zlib";
 
 type Platform = "douyin" | "bilibili" | "xiaohongshu" | "kuaishou";
 
@@ -9,6 +11,57 @@ interface DanmakuMessage {
   nickname?: string;
   text: string;
   ts: number;
+}
+
+const BILI_HEADER_LENGTH = 16;
+const BILI_OPERATION_AUTH = 7;
+const BILI_OPERATION_HEARTBEAT = 2;
+const BILI_OPERATION_HEARTBEAT_REPLY = 8;
+const BILI_OPERATION_MESSAGE = 5;
+const BILI_PROTOCOL_JSON = 0;
+const BILI_PROTOCOL_BROTLI = 3;
+const BILI_WS_URL = "wss://broadcast-msg.chat.bilibili.com:7895/sub";
+const BILI_GET_INFO_URL = "https://api.live.bilibili.com/room/v1/Room/getInfo?room_id=";
+const BILI_GET_DANMU_INFO_URL = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?id=";
+
+interface BiliAuthBody {
+  uid: number;
+  roomid: number;
+  protover: number;
+  platform: string;
+  type: number;
+  key: string;
+}
+
+function buildBiliPacket(operation: number, body: Buffer, protocol = BILI_PROTOCOL_JSON): Buffer {
+  const packetLength = BILI_HEADER_LENGTH + body.length;
+  const header = Buffer.alloc(BILI_HEADER_LENGTH);
+  header.writeUInt32BE(packetLength, 0);
+  header.writeUInt16BE(BILI_HEADER_LENGTH, 4);
+  header.writeUInt16BE(protocol, 6);
+  header.writeUInt32BE(operation, 8);
+  header.writeUInt32BE(1, 12);
+  return Buffer.concat([header, body]);
+}
+
+function parseBiliHeader(buf: Buffer): { packetLength: number; headerLength: number; protocol: number; operation: number } | null {
+  if (buf.length < BILI_HEADER_LENGTH) return null;
+  return {
+    packetLength: buf.readUInt32BE(0),
+    headerLength: buf.readUInt16BE(4),
+    protocol: buf.readUInt16BE(6),
+    operation: buf.readUInt32BE(8),
+  };
+}
+
+interface DanmuInfoResponse {
+  code: number;
+  data?: { token?: string };
+}
+
+interface RoomInfoResponse {
+  code: number;
+  data?: { room_id?: number; short_id?: number };
 }
 
 abstract class DanmakuBridge {
@@ -48,17 +101,138 @@ class DouyinDanmakuBridge extends DanmakuBridge {
 }
 
 class BilibiliDanmakuBridge extends DanmakuBridge {
-  async connect(_token: string): Promise<void> {
-    // TODO B 站直播弹幕协议差异：
-    // - 接入入口为 wss://broadcast-msg.chat.bilibili.com:7895/sub
-    // - 帧格式为固定 16 字节头（packet_length / header_length / protocol_version / operation）+ body
-    // - 鉴权包 operation=7(AUTH)，body 为 JSON：{ uid, roomid, protover:3, platform:"web", type:2, key }
-    //   key 需先通过 https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?id=real_roomid 拉取
-    // - roomid 需用 https://api.live.bilibili.com/room/v1/Room/getInfo?room_id=xxx 短号换算成真实房间号
-    // - 心跳包每 30s 发送一次 operation=2(HEARTBEAT)，body 为空，服务端回 operation=8 在线人数
-    // - 弹幕为 operation=5(SMALL_HEARTBEAT)/operation=5(NOTICE) 下 cmd="DANMU_MSG" 的 JSON
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private buffer = Buffer.alloc(0);
+
+  async connect(roomInput: string): Promise<void> {
+    const roomid = await this.resolveRealRoomId(roomInput);
+    const token = await this.fetchDanmuToken(roomid);
+
+    return new Promise<void>((resolve, reject) => {
+      const ws = new WsClient(BILI_WS_URL);
+      this.platformWs = ws;
+
+      ws.on("open", () => {
+        const authBody: BiliAuthBody = {
+          uid: 0,
+          roomid,
+          protover: BILI_PROTOCOL_BROTLI,
+          platform: "web",
+          type: 2,
+          key: token,
+        };
+        ws.send(buildBiliPacket(BILI_OPERATION_AUTH, Buffer.from(JSON.stringify(authBody))));
+        this.heartbeatTimer = setInterval(() => {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(buildBiliPacket(BILI_OPERATION_HEARTBEAT, Buffer.alloc(0)));
+          }
+        }, 30000);
+        resolve();
+      });
+
+      ws.on("message", (data: Buffer) => this.handleFrame(data));
+      ws.on("error", (err: Error) => reject(err));
+      ws.on("close", () => {
+        if (this.heartbeatTimer) {
+          clearInterval(this.heartbeatTimer);
+          this.heartbeatTimer = null;
+        }
+      });
+    });
   }
+
+  private async resolveRealRoomId(roomInput: string): Promise<number> {
+    const res = await fetch(`${BILI_GET_INFO_URL}${encodeURIComponent(roomInput)}`);
+    const json = (await res.json()) as RoomInfoResponse;
+    if (json.code !== 0 || !json.data?.room_id) {
+      throw new Error(`resolve roomid failed: code=${json.code}`);
+    }
+    return json.data.room_id;
+  }
+
+  private async fetchDanmuToken(roomid: number): Promise<string> {
+    const res = await fetch(`${BILI_GET_DANMU_INFO_URL}${roomid}`);
+    const json = (await res.json()) as DanmuInfoResponse;
+    if (json.code !== 0 || !json.data?.token) {
+      throw new Error(`fetch danmu token failed: code=${json.code}`);
+    }
+    return json.data.token;
+  }
+
+  private handleFrame(data: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, data]);
+    while (this.buffer.length >= BILI_HEADER_LENGTH) {
+      const header = parseBiliHeader(this.buffer);
+      if (!header) break;
+      if (this.buffer.length < header.packetLength) break;
+      const body = this.buffer.subarray(header.headerLength, header.packetLength);
+      this.buffer = this.buffer.subarray(header.packetLength);
+      this.dispatchFrame(header.operation, header.protocol, body);
+    }
+  }
+
+  private dispatchFrame(operation: number, protocol: number, body: Buffer): void {
+    if (operation === BILI_OPERATION_HEARTBEAT_REPLY) {
+      const online = body.length >= 4 ? body.readUInt32BE(0) : 0;
+      this.forwardToClient({
+        platform: "bilibili",
+        text: `[系统] 当前在线 ${online}`,
+        ts: Date.now(),
+      });
+      return;
+    }
+    if (operation === BILI_OPERATION_MESSAGE) {
+      if (protocol === BILI_PROTOCOL_BROTLI) {
+        try {
+          const decompressed = zlibBrotliDecompressSync(body);
+          this.parseJsonPayloads(decompressed);
+        } catch {
+          // ignore decompress error
+        }
+      } else {
+        this.parseJsonPayloads(body);
+      }
+    }
+  }
+
+  private parseJsonPayloads(buf: Buffer): void {
+    let offset = 0;
+    while (offset + BILI_HEADER_LENGTH <= buf.length) {
+      const header = parseBiliHeader(buf.subarray(offset));
+      if (!header) break;
+      if (offset + header.packetLength > buf.length) break;
+      const payload = buf.subarray(offset + header.headerLength, offset + header.packetLength);
+      offset += header.packetLength;
+      if (header.operation !== BILI_OPERATION_MESSAGE) continue;
+      try {
+        const cmd = JSON.parse(payload.toString("utf8")) as { cmd?: string; info?: unknown[] };
+        if (cmd.cmd === "DANMU_MSG" && Array.isArray(cmd.info)) {
+          const info = cmd.info;
+          const text = typeof info[1] === "string" ? info[1] : "";
+          const userInfo = Array.isArray(info[2]) ? info[2] : [];
+          const uid = typeof userInfo[0] === "number" ? String(userInfo[0]) : undefined;
+          const nickname = typeof userInfo[1] === "string" ? userInfo[1] : undefined;
+          if (text) {
+            this.forwardToClient({
+              platform: "bilibili",
+              uid,
+              nickname,
+              text,
+              ts: Date.now(),
+            });
+          }
+        }
+      } catch {
+        // ignore json parse error
+      }
+    }
+  }
+
   close(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     this.platformWs?.close();
     this.platformWs = null;
   }
@@ -159,9 +333,13 @@ export const danmakuRouter = Router();
 
 danmakuRouter.get("/connect/:platform", (req: Request, res: Response) => {
   const platform = req.params.platform;
+  const tokenHint =
+    platform === "bilibili"
+      ? "token = B站房间号(短号或真实号均可，服务端自动换算真实roomid并拉取danmu key)"
+      : "token = 平台 access_token (OAuth 回调获得)";
   res.json({
     platform,
-    ws_path: `/ws?platform=${encodeURIComponent(platform)}&token=ACCESS_TOKEN`,
-    note: "Real danmaku WebSocket endpoints must be wired per open-platform docs (see routes/danmaku.ts TODO).",
+    ws_path: `/ws?platform=${encodeURIComponent(platform)}&token=YOUR_TOKEN_OR_ROOMID`,
+    note: tokenHint,
   });
 });

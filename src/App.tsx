@@ -1,11 +1,20 @@
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import { QuickStart } from "@/pages/QuickStart";
-import { StageShow } from "@/components/Stage/StageShow";
-import LiveDeck from "@/pages/LiveDeck";
-import { ObsGuide } from "@/pages/ObsGuide";
-import { BpmLab } from "@/pages/BpmLab";
+
+const StageShow = lazy(() => import("@/components/Stage/StageShow").then((m) => ({ default: m.StageShow })));
+const LiveDeck = lazy(() => import("@/pages/LiveDeck"));
+const ObsGuide = lazy(() => import("@/pages/ObsGuide").then((m) => ({ default: m.ObsGuide })));
+const BpmLab = lazy(() => import("@/pages/BpmLab").then((m) => ({ default: m.BpmLab })));
 
 type View = "quickstart" | "stage" | "console" | "obsguide" | "bpmlab";
+
+function PageFallback() {
+  return (
+    <div className="flex h-screen w-screen items-center justify-center" style={{ background: "#05050C" }}>
+      <div className="font-display text-sm uppercase tracking-[0.3em] text-white/30">loading...</div>
+    </div>
+  );
+}
 
 export default function App() {
   const [view, setView] = useState<View>("quickstart");
@@ -21,17 +30,12 @@ export default function App() {
     );
   }
 
-  if (view === "stage") {
-    return <StageShow onExit={() => setView("console")} />;
-  }
-
-  if (view === "obsguide") {
-    return <ObsGuide onBack={() => setView("quickstart")} />;
-  }
-
-  if (view === "bpmlab") {
-    return <BpmLab onBack={() => setView("quickstart")} />;
-  }
-
-  return <LiveDeck onGoStage={() => setView("stage")} />;
+  return (
+    <Suspense fallback={<PageFallback />}>
+      {view === "stage" && <StageShow onExit={() => setView("console")} />}
+      {view === "obsguide" && <ObsGuide onBack={() => setView("quickstart")} />}
+      {view === "bpmlab" && <BpmLab onBack={() => setView("quickstart")} />}
+      {view === "console" && <LiveDeck onGoStage={() => setView("stage")} />}
+    </Suspense>
+  );
 }

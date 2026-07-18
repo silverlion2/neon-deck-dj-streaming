@@ -6,6 +6,16 @@ import tsconfigPaths from "vite-tsconfig-paths";
 export default defineConfig({
   build: {
     sourcemap: 'hidden',
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'state-vendor': ['zustand'],
+          'icon-vendor': ['lucide-react'],
+        },
+      },
+    },
   },
   plugins: [
     react({

@@ -25,3 +25,4 @@ dist-ssr
 
 # Trae internal
 .trae/
+.vercel
